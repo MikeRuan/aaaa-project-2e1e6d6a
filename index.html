@@ -8,28 +8,18 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #1a1a2e; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Arial', sans-serif; }
   #gameContainer { position: relative; width: 480px; height: 600px; }
-  canvas { position: absolute; top: 0; left: 0; z-index: 1; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
-  #ui { position: absolute; bottom: 10px; left: 0; right: 0; z-index: 10; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 0 10px; }
-  .btn { background: rgba(255,255,255,0.9); border: none; border-radius: 20px; padding: 8px 16px; font-size: 14px; cursor: pointer; font-weight: bold; color: #333; box-shadow: 0 3px 8px rgba(0,0,0,0.3); transition: all 0.2s; }
-  .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 12px rgba(0,0,0,0.4); }
-  .btn:active { transform: translateY(0); }
-  #statusBar { position: absolute; top: 10px; left: 0; right: 0; z-index: 10; text-align: center; }
+  canvas { position: absolute; top: 0; left: 0; z-index: 1; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); cursor: pointer; }
+  #statusBar { position: absolute; top: 10px; left: 0; right: 0; z-index: 10; text-align: center; pointer-events: none; }
   #statusMsg { background: rgba(0,0,0,0.55); color: #fff; border-radius: 12px; padding: 6px 14px; font-size: 13px; display: inline-block; }
+  #hint { position: absolute; bottom: 14px; left: 0; right: 0; z-index: 10; text-align: center; pointer-events: none; }
+  #hintMsg { background: rgba(255,200,80,0.85); color: #333; border-radius: 20px; padding: 6px 18px; font-size: 13px; font-weight: bold; display: inline-block; }
 </style>
 </head>
 <body>
 <div id="gameContainer">
   <canvas id="c" width="480" height="600"></canvas>
   <div id="statusBar"><span id="statusMsg">🌙 夜晚... 好好睡一觉吧</span></div>
-  <div id="ui">
-    <button class="btn" id="btnWakeUp">🌅 起床</button>
-    <button class="btn" id="btnWindow">🪟 开窗</button>
-    <button class="btn" id="btnCook">🍳 煮早餐</button>
-    <button class="btn" id="btnEat">🍽️ 吃早餐</button>
-    <button class="btn" id="btnCookDinner">🍜 煮晚餐</button>
-    <button class="btn" id="btnLight">💡 开灯</button>
-    <button class="btn" id="btnSleep">😴 睡觉</button>
-  </div>
+  <div id="hint"><span id="hintMsg">👆 点击人物互动！</span></div>
 </div>
 
 <script>
@@ -38,356 +28,466 @@ document.addEventListener('DOMContentLoaded', function() {
   var ctx = canvas.getContext('2d');
   var W = 480, H = 600;
 
-  // --- Game State ---
-  var state = {
-    phase: 'night',      // night, morning, windowOpen, cooking, eating, afternoon, raining, dusk, dinnerCooked, moonlit
-    sleeping: true,
-    windowOpen: false,
-    lightOn: false,
-    raining: false,
-    sunX: -60, sunY: 80,
-    moonX: 380, moonY: 60,
-    skyColor: [15, 10, 40],
-    targetSky: [15, 10, 40],
-    raindrops: [],
-    cookProgress: 0,
-    cooking: false,
-    eating: false,
-    eatProgress: 0,
-    hasMeal: false,
-    hasDinner: false,
-    cookingDinner: false,
-    steamFrames: 0,
-    personY: 0,       // 0=in bed, 1=standing
-    personAnim: 0,
-    tick: 0,
-    msg: '🌙 夜晚... 好好睡一觉吧'
-  };
-
-  function lerp(a, b, t) { return a + (b - a) * t; }
-  function setSky(r, g, b) { state.targetSky = [r, g, b]; }
   function setMsg(m) { document.getElementById('statusMsg').textContent = m; }
+  function setHint(m) { document.getElementById('hintMsg').textContent = m; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
 
-  // Rain init
+  // ---- STATE ----
+  var phase = 'night'; // night, rising, morning, goWindow, windowOpen, goCook, cooking, goEat, eating, afternoon, raining, goCloseWin, winClosed, rainOver, goOpenWin, dusk, goCookDinner, cookingDinner, moonlit, goSleep
+  var sleeping = true;
+  var windowOpen = false;
+  var lightOn = false;
+  var raining = false;
+  var raindrops = [];
+  var hasMeal = false;
+  var hasDinner = false;
+  var cooking = false;
+  var cookingDinner = false;
+  var eating = false;
+  var steamFrames = 0;
+  var tick = 0;
+  var clickable = false; // can user click person?
+
+  // Sky
+  var skyColor = [15, 10, 40];
+  var targetSky = [15, 10, 40];
+  function setSky(r,g,b){ targetSky=[r,g,b]; }
+
+  // Sun & Moon
+  var sunX = -60, sunY = 120;
+  var moonX = 380, moonY = 60;
+
+  // Person walk animation
+  var personX = 245, personY = 0; // Y: 0=in bed area, actual screen y computed
+  var personTargetX = 245;
+  var personWalking = false;
+  var personFacing = 1; // 1=right, -1=left
+  var personAction = ''; // 'sleep','stand','walk','cook','eat','close'
+  var actionCallback = null;
+
+  function walkTo(tx, cb) {
+    personTargetX = tx;
+    personWalking = true;
+    personFacing = tx > personX ? 1 : -1;
+    personAction = 'walk';
+    actionCallback = cb;
+  }
+
   function spawnRain() {
-    state.raindrops = [];
+    raindrops = [];
     for (var i = 0; i < 80; i++) {
-      state.raindrops.push({ x: Math.random()*W, y: Math.random()*H, spd: 6+Math.random()*4, len: 12+Math.random()*10 });
+      raindrops.push({ x: Math.random()*W, y: Math.random()*H, spd: 6+Math.random()*4, len: 12+Math.random()*10 });
     }
   }
 
-  // --- DRAW FUNCTIONS ---
+  // ---- PHASE TRIGGERS ----
+  function startDay() {
+    // Sun rises, hint to click person
+    phase = 'rising';
+    setSky(255, 160, 80);
+    sunX = 20; sunY = 150;
+    setMsg('🌅 太阳升起来了！');
+    setHint('👆 点击人物起床！');
+    clickable = true;
+  }
+
+  function doWakeUp() {
+    clickable = false;
+    sleeping = false;
+    personAction = 'stand';
+    personX = 245; personTargetX = 245;
+    phase = 'morning';
+    setMsg('🌅 早上好！去开窗吧！');
+    setHint('👆 点击人物去开窗！');
+    setTimeout(function(){ clickable = true; }, 600);
+  }
+
+  function doGoWindow() {
+    clickable = false;
+    setMsg('🚶 走向窗户...');
+    setHint('');
+    walkTo(100, function(){
+      personFacing = -1;
+      personAction = 'stand';
+      windowOpen = true;
+      phase = 'windowOpen';
+      setSky(135, 206, 250);
+      setMsg('🪟 窗户打开了！新鲜空气～去煮早餐吧！');
+      setTimeout(function(){ setHint('👆 点击人物去煮早餐！'); clickable = true; }, 700);
+    });
+  }
+
+  function doGoCook() {
+    clickable = false;
+    setMsg('🚶 走向厨房...');
+    setHint('');
+    walkTo(330, function(){
+      personAction = 'cook';
+      cooking = true;
+      phase = 'cooking';
+      setSky(100, 180, 255);
+      setMsg('🍳 煮早餐中... 香喷喷的煎蛋！');
+      setTimeout(function(){
+        cooking = false; hasMeal = true;
+        phase = 'goEat';
+        setMsg('🍽️ 早餐好了！去吃吧！');
+        setHint('👆 点击人物去吃早餐！');
+        clickable = true;
+      }, 3500);
+    });
+  }
+
+  function doGoEat() {
+    clickable = false;
+    setMsg('🚶 走向桌子...');
+    walkTo(205, function(){
+      personAction = 'eat';
+      eating = true;
+      phase = 'eating';
+      setMsg('😋 吃早餐中... 好好吃！');
+      setTimeout(function(){
+        eating = false; hasMeal = false;
+        phase = 'afternoon';
+        setSky(70, 140, 220);
+        setMsg('☀️ 吃完了！美好的下午...');
+        setHint('');
+        // After a moment, it rains
+        setTimeout(function(){
+          phase = 'raining';
+          raining = true; spawnRain();
+          setSky(80, 90, 110);
+          setMsg('🌧️ 突然下雨了！快去关窗！');
+          setHint('👆 点击人物去关窗！');
+          clickable = true;
+        }, 3000);
+      }, 3500);
+    });
+  }
+
+  function doCloseWindow() {
+    clickable = false;
+    setMsg('🚶 跑去关窗...');
+    setHint('');
+    walkTo(100, function(){
+      personFacing = -1;
+      windowOpen = false;
+      phase = 'winClosed';
+      setMsg('🪟 窗户关上了！等雨停吧...');
+      personAction = 'stand';
+      // Rain stops after a while
+      setTimeout(function(){
+        raining = false; raindrops = [];
+        setSky(160, 130, 190);
+        phase = 'rainOver';
+        setMsg('🌤️ 雨停了！去开窗吧！');
+        setHint('👆 点击人物去开窗！');
+        clickable = true;
+      }, 5000);
+    });
+  }
+
+  function doOpenWindowAgain() {
+    clickable = false;
+    walkTo(100, function(){
+      personFacing = -1;
+      windowOpen = true;
+      phase = 'dusk';
+      setSky(40, 30, 80);
+      setMsg('🌆 天色暗了... 自动开灯，去煮晚餐吧！');
+      setHint('');
+      lightOn = true;
+      setTimeout(function(){
+        setMsg('💡 灯开了！去煮晚餐吧！');
+        setHint('👆 点击人物去煮晚餐！');
+        clickable = true;
+      }, 1500);
+    });
+  }
+
+  function doGoCookDinner() {
+    clickable = false;
+    setMsg('🚶 走向厨房...');
+    setHint('');
+    walkTo(330, function(){
+      personAction = 'cook';
+      cookingDinner = true;
+      phase = 'cookingDinner';
+      setSky(15, 10, 60);
+      setMsg('🍜 煮晚餐中... 热腾腾的面！');
+      setTimeout(function(){
+        cookingDinner = false; hasDinner = true;
+        phase = 'moonlit';
+        setSky(15, 10, 40);
+        moonX = 380; moonY = 60;
+        setMsg('🌕 晚餐好了！月亮出来了，吃完关灯睡觉吧！');
+        setHint('👆 点击人物去睡觉！');
+        clickable = true;
+      }, 3500);
+    });
+  }
+
+  function doSleep() {
+    clickable = false;
+    setHint('');
+    walkTo(245, function(){
+      lightOn = false;
+      hasDinner = false;
+      windowOpen = false;
+      sleeping = true;
+      personAction = 'sleep';
+      phase = 'night';
+      setSky(15, 10, 40);
+      sunX = -60; sunY = 150;
+      setMsg('🌙 晚安！甜甜的梦～');
+      // Next day rises after delay
+      setTimeout(function(){
+        startDay();
+      }, 4000);
+    });
+  }
+
+  // ---- CLICK HANDLER ----
+  canvas.addEventListener('click', function(e) {
+    if (!clickable) return;
+    var rect = canvas.getBoundingClientRect();
+    var mx = (e.clientX - rect.left) * (W / rect.width);
+    var my = (e.clientY - rect.top) * (H / rect.height);
+    // Person hit area
+    var px = sleeping ? 245 : personX;
+    var py = sleeping ? H*0.55+48 : H*0.55+30;
+    var dist = Math.sqrt((mx-px)*(mx-px)+(my-py)*(my-py));
+    if (dist > 55) return; // must click near person
+    // Phase-based actions
+    if (phase === 'rising') doWakeUp();
+    else if (phase === 'morning') doGoWindow();
+    else if (phase === 'windowOpen') doGoCook();
+    else if (phase === 'goEat') doGoEat();
+    else if (phase === 'raining') doCloseWindow();
+    else if (phase === 'rainOver') doOpenWindowAgain();
+    else if (phase === 'dusk') doGoCookDinner();
+    else if (phase === 'moonlit') doSleep();
+  });
+
+  // ---- DRAW FUNCTIONS ----
   function drawSky() {
-    var c = state.skyColor;
-    var grad = ctx.createLinearGradient(0, 0, 0, H*0.55);
+    var c = skyColor;
+    var grad = ctx.createLinearGradient(0,0,0,H*0.55);
     grad.addColorStop(0, `rgb(${c[0]},${c[1]},${c[2]})`);
     grad.addColorStop(1, `rgb(${Math.min(c[0]+40,255)},${Math.min(c[1]+30,255)},${Math.min(c[2]+20,255)})`);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H*0.55);
+    ctx.fillStyle = grad; ctx.fillRect(0,0,W,H*0.55);
   }
 
   function drawSun() {
-    if (state.phase === 'night' || state.phase === 'moonlit') return;
-    var alpha = state.phase === 'morning' ? 0.9 : state.phase === 'dusk' ? 0.6 : 1;
+    if (phase==='night'||phase==='moonlit'||phase==='cookingDinner') return;
     ctx.save();
-    ctx.globalAlpha = alpha;
-    // Glow
-    var grad = ctx.createRadialGradient(state.sunX, state.sunY, 5, state.sunX, state.sunY, 50);
-    grad.addColorStop(0, 'rgba(255,240,100,0.8)');
-    grad.addColorStop(1, 'rgba(255,200,0,0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath(); ctx.arc(state.sunX, state.sunY, 50, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = '#FFE033';
-    ctx.beginPath(); ctx.arc(state.sunX, state.sunY, 22, 0, Math.PI*2); ctx.fill();
+    var grad = ctx.createRadialGradient(sunX,sunY,5,sunX,sunY,50);
+    grad.addColorStop(0,'rgba(255,240,100,0.8)'); grad.addColorStop(1,'rgba(255,200,0,0)');
+    ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(sunX,sunY,50,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#FFE033'; ctx.beginPath(); ctx.arc(sunX,sunY,22,0,Math.PI*2); ctx.fill();
     ctx.restore();
   }
 
   function drawMoon() {
-    if (state.phase !== 'night' && state.phase !== 'moonlit') return;
+    if (phase!=='night'&&phase!=='moonlit'&&phase!=='cookingDinner') return;
     ctx.save();
-    ctx.fillStyle = '#FFFDE0';
-    ctx.beginPath(); ctx.arc(state.moonX, state.moonY, 24, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = 'rgba(200,200,180,0.3)';
-    ctx.beginPath(); ctx.arc(state.moonX+8, state.moonY-6, 8, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='#FFFDE0'; ctx.beginPath(); ctx.arc(moonX,moonY,24,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(200,200,180,0.3)'; ctx.beginPath(); ctx.arc(moonX+8,moonY-6,8,0,Math.PI*2); ctx.fill();
     ctx.restore();
   }
 
   function drawClouds() {
+    if (phase==='night'||phase==='moonlit') return;
     ctx.save();
-    ctx.fillStyle = state.raining ? 'rgba(120,120,140,0.85)' : 'rgba(255,255,255,0.75)';
-    var cx = [(state.tick*0.2)%W, (state.tick*0.15+180)%W, (state.tick*0.1+320)%W];
-    cx.forEach(function(x) {
-      ctx.beginPath(); ctx.ellipse(x, 70, 45, 22, 0, 0, Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(x+30, 65, 30, 18, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = raining ? 'rgba(100,100,120,0.85)' : 'rgba(255,255,255,0.75)';
+    var offsets = [(tick*0.2)%W, (tick*0.15+180)%W, (tick*0.1+320)%W];
+    offsets.forEach(function(x){
+      ctx.beginPath(); ctx.ellipse(x,70,45,22,0,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(x+30,65,30,18,0,0,Math.PI*2); ctx.fill();
     });
     ctx.restore();
   }
 
   function drawRoom() {
     // Floor
-    ctx.fillStyle = '#C8A97A';
-    ctx.fillRect(0, H*0.55, W, H*0.45);
-    // Wall
-    ctx.fillStyle = '#F5E6C8';
-    ctx.fillRect(0, H*0.55-2, W, 4);
+    ctx.fillStyle='#C8A97A'; ctx.fillRect(0,H*0.55,W,H*0.45);
+    // Wall line
+    ctx.fillStyle='#F5E6C8'; ctx.fillRect(0,H*0.55-2,W,4);
     // Wallpaper stripes
-    ctx.fillStyle = 'rgba(200,160,100,0.15)';
-    for (var i = 0; i < W; i += 40) { ctx.fillRect(i, 0, 2, H*0.55); }
-    // Window
-    var wx = 60, wy = H*0.55+30, ww = 100, wh = 90;
-    ctx.fillStyle = state.windowOpen ? (state.raining ? '#90B0D0' : '#ADE8FF') : (state.lightOn ? '#FFEEAA' : '#B0CCE8');
-    ctx.fillRect(wx, wy, ww, wh);
-    ctx.strokeStyle = '#8B6C3A'; ctx.lineWidth = 5;
-    ctx.strokeRect(wx, wy, ww, wh);
-    ctx.strokeStyle = '#8B6C3A'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(wx+ww/2, wy); ctx.lineTo(wx+ww/2, wy+wh); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(wx, wy+wh/2); ctx.lineTo(wx+ww, wy+wh/2); ctx.stroke();
-    // Window open flap
-    if (state.windowOpen) {
-      ctx.save(); ctx.strokeStyle='#8B6C3A'; ctx.lineWidth=3;
-      ctx.strokeRect(wx+ww/2+2, wy+2, ww/2-4, wh/2-4); ctx.restore();
-    }
-    // Rain on window
-    if (state.raining && state.windowOpen) {
-      ctx.save(); ctx.strokeStyle='rgba(150,180,220,0.6)'; ctx.lineWidth=1;
-      for (var d=0;d<5;d++){ctx.beginPath();ctx.moveTo(wx+15+d*16,wy+5);ctx.lineTo(wx+10+d*16,wy+wh-5);ctx.stroke();}
-      ctx.restore();
-    }
+    ctx.fillStyle='rgba(200,160,100,0.12)';
+    for(var i=0;i<W;i+=40){ ctx.fillRect(i,0,2,H*0.55); }
+    // ---- WINDOW ----
+    var wx=50, wy=H*0.55+30, ww=100, wh=90;
+    ctx.fillStyle = windowOpen ? (raining?'#90B0D0':'#ADE8FF') : (lightOn?'#FFEEAA':'#B0CCE8');
+    ctx.fillRect(wx,wy,ww,wh);
+    ctx.strokeStyle='#8B6C3A'; ctx.lineWidth=5; ctx.strokeRect(wx,wy,ww,wh);
+    ctx.strokeStyle='#8B6C3A'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(wx+ww/2,wy); ctx.lineTo(wx+ww/2,wy+wh); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(wx,wy+wh/2); ctx.lineTo(wx+ww,wy+wh/2); ctx.stroke();
+    if(windowOpen){ctx.save();ctx.strokeStyle='#8B6C3A';ctx.lineWidth=3;ctx.strokeRect(wx+ww/2+2,wy+2,ww/2-4,wh/2-4);ctx.restore();}
+    if(raining&&windowOpen){ctx.save();ctx.strokeStyle='rgba(150,180,220,0.5)';ctx.lineWidth=1;for(var d=0;d<5;d++){ctx.beginPath();ctx.moveTo(wx+15+d*16,wy+5);ctx.lineTo(wx+10+d*16,wy+wh-5);ctx.stroke();}ctx.restore();}
     // Curtains
-    ctx.fillStyle = '#E88080';
-    ctx.fillRect(wx-12, wy-5, 14, wh+10);
-    ctx.fillRect(wx+ww-2, wy-5, 14, wh+10);
-    // Lamp on wall
-    if (state.lightOn) {
+    ctx.fillStyle='#E88080'; ctx.fillRect(wx-12,wy-5,14,wh+10); ctx.fillRect(wx+ww-2,wy-5,14,wh+10);
+    // ---- LAMP ----
+    if(lightOn){
       ctx.save();
-      var lg = ctx.createRadialGradient(350, H*0.55+20, 5, 350, H*0.55+60, 80);
-      lg.addColorStop(0,'rgba(255,240,150,0.6)'); lg.addColorStop(1,'rgba(255,200,0,0)');
-      ctx.fillStyle=lg; ctx.beginPath(); ctx.arc(350,H*0.55+20,80,0,Math.PI*2); ctx.fill();
+      var lg=ctx.createRadialGradient(360,H*0.55+20,5,360,H*0.55+60,90);
+      lg.addColorStop(0,'rgba(255,240,150,0.55)'); lg.addColorStop(1,'rgba(255,200,0,0)');
+      ctx.fillStyle=lg; ctx.beginPath(); ctx.arc(360,H*0.55+20,90,0,Math.PI*2); ctx.fill();
       ctx.restore();
     }
-    ctx.fillStyle = '#D4A030';
-    ctx.beginPath(); ctx.arc(350, H*0.55+18, 12, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = '#8B6C3A';
-    ctx.fillRect(347, H*0.55+30, 6, 20);
+    ctx.fillStyle='#D4A030'; ctx.beginPath(); ctx.arc(360,H*0.55+18,12,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#8B6C3A'; ctx.fillRect(357,H*0.55+30,6,20);
   }
 
   function drawBed() {
-    var bx=200, by=H*0.55+30;
-    // Bed frame
-    ctx.fillStyle = '#8B6C3A';
-    ctx.fillRect(bx, by+60, 170, 10);
-    ctx.fillRect(bx, by+55, 20, 70); ctx.fillRect(bx+150, by+55, 20, 70);
-    // Mattress
-    ctx.fillStyle = '#E8D5B0';
-    ctx.fillRect(bx+10, by+35, 160, 60);
-    // Pillow
-    ctx.fillStyle = '#FFFFFF';
-    ctx.beginPath(); ctx.ellipse(bx+50, by+48, 30, 15, 0, 0, Math.PI*2); ctx.fill();
-    // Blanket
-    ctx.fillStyle = '#7BC8E8';
-    ctx.fillRect(bx+10, by+48, 160, 45);
+    var bx=170, by=H*0.55+30;
+    ctx.fillStyle='#8B6C3A';
+    ctx.fillRect(bx,by+60,170,10);
+    ctx.fillRect(bx,by+55,20,70); ctx.fillRect(bx+150,by+55,20,70);
+    ctx.fillStyle='#E8D5B0'; ctx.fillRect(bx+10,by+35,160,60);
+    ctx.fillStyle='#FFFFFF'; ctx.beginPath(); ctx.ellipse(bx+45,by+48,28,14,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#7BC8E8'; ctx.fillRect(bx+10,by+48,160,45);
     ctx.fillStyle='rgba(100,180,220,0.3)';
     for(var s=0;s<4;s++){ctx.fillRect(bx+10,by+55+s*8,160,4);}
   }
 
   function drawKitchen() {
-    // Stove
-    var sx=290, sy=H*0.55+80;
-    ctx.fillStyle='#888'; ctx.fillRect(sx,sy,120,60); ctx.fillStyle='#666'; ctx.fillRect(sx+5,sy+5,110,50);
+    var sx=295, sy=H*0.55+80;
+    ctx.fillStyle='#999'; ctx.fillRect(sx,sy,110,55);
+    ctx.fillStyle='#666'; ctx.fillRect(sx+5,sy+5,100,45);
     ctx.fillStyle='#333';
-    ctx.beginPath();ctx.arc(sx+35,sy+20,12,0,Math.PI*2);ctx.fill();
-    ctx.beginPath();ctx.arc(sx+85,sy+20,12,0,Math.PI*2);ctx.fill();
-    // Pan
-    if (state.hasMeal || state.cooking || state.hasDinner || state.cookingDinner) {
-      ctx.fillStyle='#555'; ctx.fillRect(sx+20,sy+8,50,8); ctx.fillRect(sx+10,sy+16,60,12);
-      if (state.cooking || state.hasMeal) { ctx.fillStyle='#FFB347'; ctx.beginPath();ctx.arc(sx+40,sy+22,10,0,Math.PI*2);ctx.fill(); }
-      if (state.cookingDinner || state.hasDinner) { ctx.fillStyle='#FF6B6B'; ctx.beginPath();ctx.arc(sx+40,sy+22,10,0,Math.PI*2);ctx.fill(); }
-      // Steam
-      if ((state.cooking||state.cookingDinner) && state.steamFrames%20<10) {
-        ctx.save(); ctx.strokeStyle='rgba(200,200,200,0.6)'; ctx.lineWidth=3;
-        for(var s2=0;s2<3;s2++){ctx.beginPath();ctx.moveTo(sx+28+s2*10,sy+8);ctx.bezierCurveTo(sx+22+s2*10,sy-5,sx+34+s2*10,sy-15,sx+28+s2*10,sy-25);ctx.stroke();}
+    ctx.beginPath();ctx.arc(sx+28,sy+18,11,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(sx+75,sy+18,11,0,Math.PI*2);ctx.fill();
+    if(hasMeal||cooking||hasDinner||cookingDinner){
+      ctx.fillStyle='#555'; ctx.fillRect(sx+15,sy+7,50,7); ctx.fillRect(sx+10,sy+14,58,11);
+      if(cooking||hasMeal){ctx.fillStyle='#FFB347';ctx.beginPath();ctx.arc(sx+38,sy+20,9,0,Math.PI*2);ctx.fill();}
+      if(cookingDinner||hasDinner){ctx.fillStyle='#FF6B6B';ctx.beginPath();ctx.arc(sx+38,sy+20,9,0,Math.PI*2);ctx.fill();}
+      if((cooking||cookingDinner)&&steamFrames%20<10){
+        ctx.save();ctx.strokeStyle='rgba(200,200,200,0.6)';ctx.lineWidth=3;
+        for(var s2=0;s2<3;s2++){ctx.beginPath();ctx.moveTo(sx+22+s2*10,sy+7);ctx.bezierCurveTo(sx+16+s2*10,sy-5,sx+28+s2*10,sy-15,sx+22+s2*10,sy-25);ctx.stroke();}
         ctx.restore();
       }
     }
-    // Table & plate
-    ctx.fillStyle='#C8A060'; ctx.fillRect(180,H*0.55+100,100,10); ctx.fillRect(200,H*0.55+110,60,50);
-    if (state.hasMeal && state.phase==='eating'||state.hasMeal&&state.phase==='morning'&&state.eating) {
-      ctx.fillStyle='#FFF'; ctx.beginPath(); ctx.ellipse(230,H*0.55+105,22,10,0,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle='#FFB347'; ctx.beginPath(); ctx.arc(230,H*0.55+105,8,0,Math.PI*2); ctx.fill();
+    // Table
+    ctx.fillStyle='#C8A060'; ctx.fillRect(180,H*0.55+100,90,8); ctx.fillRect(195,H*0.55+108,60,48);
+    if(hasMeal){
+      ctx.fillStyle='#FFF'; ctx.beginPath(); ctx.ellipse(225,H*0.55+103,20,9,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#FFB347'; ctx.beginPath(); ctx.arc(225,H*0.55+103,7,0,Math.PI*2); ctx.fill();
     }
-    if (state.hasDinner) {
-      ctx.fillStyle='#FFF'; ctx.beginPath(); ctx.ellipse(230,H*0.55+105,22,10,0,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle='#FF6B6B'; ctx.beginPath(); ctx.arc(230,H*0.55+105,8,0,Math.PI*2); ctx.fill();
+    if(hasDinner){
+      ctx.fillStyle='#FFF'; ctx.beginPath(); ctx.ellipse(225,H*0.55+103,20,9,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#FF6B6B'; ctx.beginPath(); ctx.arc(225,H*0.55+103,7,0,Math.PI*2); ctx.fill();
     }
   }
 
   function drawPerson() {
-    var px, py, sleeping = state.sleeping;
-    if (sleeping) {
-      // Person lying in bed
-      px=250; py=H*0.55+48;
-      ctx.save();
-      // Head
+    ctx.save();
+    if(sleeping){
+      var px=245, py=H*0.55+48;
       ctx.fillStyle='#FDBCB4'; ctx.beginPath(); ctx.arc(px,py,13,0,Math.PI*2); ctx.fill();
-      // Zzzs
-      ctx.fillStyle='rgba(100,150,255,0.8)'; ctx.font='bold 13px Arial';
-      var zOff = Math.sin(state.tick*0.05)*3;
-      ctx.fillText('z',px+15,py-8+zOff); ctx.fillText('z',px+22,py-18+zOff); ctx.fillText('Z',px+28,py-30+zOff);
-      ctx.restore();
+      ctx.fillStyle='rgba(100,150,255,0.85)'; ctx.font='bold 13px Arial';
+      var zo=Math.sin(tick*0.05)*3;
+      ctx.fillText('z',px+15,py-8+zo); ctx.fillText('z',px+22,py-18+zo); ctx.fillText('Z',px+28,py-30+zo);
     } else {
-      // Person standing
-      px=230; py=H*0.55+30;
-      var bob = Math.sin(state.tick*0.1)*2;
-      ctx.save();
-      ctx.fillStyle='#FDBCB4';
-      ctx.beginPath(); ctx.arc(px,py+bob,14,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle='#5B9BD5';
-      ctx.beginPath(); ctx.moveTo(px-12,py+14+bob); ctx.lineTo(px+12,py+14+bob); ctx.lineTo(px+14,py+55+bob); ctx.lineTo(px-14,py+55+bob); ctx.closePath(); ctx.fill();
-      ctx.fillStyle='#3A6EA5';
-      ctx.fillRect(px-20,py+14+bob,8,28); ctx.fillRect(px+12,py+14+bob,8,28);
-      ctx.fillStyle='#FDBCB4';
-      ctx.fillRect(px-22,py+40+bob,10,16); ctx.fillRect(px+12,py+40+bob,10,16);
+      var px2=personX, py2=H*0.55+30;
+      var bob = (personWalking ? Math.sin(tick*0.22)*4 : Math.sin(tick*0.08)*1.5);
+      // Shadow
+      ctx.fillStyle='rgba(0,0,0,0.12)'; ctx.beginPath(); ctx.ellipse(px2,py2+75,16,5,0,0,Math.PI*2); ctx.fill();
+      // Legs
       ctx.fillStyle='#555';
-      ctx.fillRect(px-14,py+55+bob,12,16); ctx.fillRect(px+2,py+55+bob,12,16);
-      // Happy face
-      if(state.eating){ctx.fillStyle='#333';ctx.font='10px Arial';ctx.fillText('😋',px-8,py+8+bob);}
-      ctx.restore();
+      if(personWalking){
+        var la=Math.sin(tick*0.22)*14;
+        ctx.fillRect(px2-10+la,py2+54,10,20); ctx.fillRect(px2-la,py2+54,10,20);
+      } else {
+        ctx.fillRect(px2-12,py2+54,10,20); ctx.fillRect(px2+2,py2+54,10,20);
+      }
+      // Body
+      ctx.fillStyle='#5B9BD5'; ctx.beginPath(); ctx.moveTo(px2-13,py2+14+bob); ctx.lineTo(px2+13,py2+14+bob); ctx.lineTo(px2+15,py2+55+bob); ctx.lineTo(px2-15,py2+55+bob); ctx.closePath(); ctx.fill();
+      // Arms
+      ctx.fillStyle='#3A6EA5';
+      if(personAction==='cook'){
+        ctx.fillRect(px2+12*personFacing,py2+16+bob,8*personFacing,22);
+        ctx.fillRect(px2-12,py2+16+bob,-8,30);
+      } else if(personAction==='eat'){
+        ctx.fillRect(px2-20,py2+16+bob,8,24);
+        ctx.fillRect(px2+12,py2+16+bob,8,24);
+      } else {
+        ctx.fillRect(px2-20,py2+14+bob,8,26); ctx.fillRect(px2+12,py2+14+bob,8,26);
+      }
+      // Hands
+      ctx.fillStyle='#FDBCB4';
+      ctx.beginPath(); ctx.arc(px2-16,py2+40+bob,6,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(px2+18,py2+40+bob,6,0,Math.PI*2); ctx.fill();
+      // Head
+      ctx.fillStyle='#FDBCB4'; ctx.beginPath(); ctx.arc(px2,py2+bob,14,0,Math.PI*2); ctx.fill();
+      // Hair
+      ctx.fillStyle='#5C3A1E'; ctx.beginPath(); ctx.arc(px2,py2-4+bob,14,Math.PI,0); ctx.fill();
+      // Eyes
+      ctx.fillStyle='#333';
+      ctx.beginPath(); ctx.arc(px2-5*personFacing+3,py2+2+bob,2.5,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(px2+5*personFacing+3,py2+2+bob,2.5,0,Math.PI*2); ctx.fill();
+      // Smile
+      ctx.strokeStyle='#333'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(px2,py2+6+bob,5,0.1*Math.PI,0.9*Math.PI); ctx.stroke();
+      if(eating){ctx.font='16px Arial';ctx.fillText('😋',px2-8,py2-18+bob);}
     }
+    ctx.restore();
   }
 
   function drawRain() {
-    if (!state.raining) return;
+    if(!raining) return;
     ctx.save(); ctx.strokeStyle='rgba(150,200,255,0.5)'; ctx.lineWidth=1.5;
-    state.raindrops.forEach(function(d) {
+    raindrops.forEach(function(d){
       ctx.beginPath(); ctx.moveTo(d.x,d.y); ctx.lineTo(d.x-3,d.y+d.len); ctx.stroke();
-      d.y += d.spd;
-      if (d.y > H) { d.y=-10; d.x=Math.random()*W; }
+      d.y+=d.spd; if(d.y>H){d.y=-10;d.x=Math.random()*W;}
     });
     ctx.restore();
   }
 
+  function drawClickHalo() {
+    if(!clickable) return;
+    var px = sleeping ? 245 : personX;
+    var py = sleeping ? H*0.55+48 : H*0.55+30;
+    ctx.save();
+    var pulse = 0.4+0.3*Math.sin(tick*0.12);
+    ctx.globalAlpha=pulse;
+    ctx.strokeStyle='#FFE033'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(px,py,28,0,Math.PI*2); ctx.stroke();
+    ctx.restore();
+  }
+
+  // ---- MAIN LOOP ----
   function drawAll() {
     ctx.clearRect(0,0,W,H);
-    drawSky(); drawSun(); drawMoon();
-    if (state.phase!=='night'&&state.phase!=='moonlit') drawClouds();
-    drawRoom(); drawBed(); drawKitchen();
-    drawPerson(); drawRain();
-    state.tick++;
-    state.steamFrames++;
     // Lerp sky
-    state.skyColor[0]=lerp(state.skyColor[0],state.targetSky[0],0.02);
-    state.skyColor[1]=lerp(state.skyColor[1],state.targetSky[1],0.02);
-    state.skyColor[2]=lerp(state.skyColor[2],state.targetSky[2],0.02);
+    skyColor[0]=lerp(skyColor[0],targetSky[0],0.018);
+    skyColor[1]=lerp(skyColor[1],targetSky[1],0.018);
+    skyColor[2]=lerp(skyColor[2],targetSky[2],0.018);
     // Move sun
-    if (state.phase==='morning'||state.phase==='windowOpen'||state.phase==='cooking'||state.phase==='eating'||state.phase==='afternoon') {
-      if(state.sunX<360) state.sunX+=0.3;
-      if(state.sunY>60&&state.sunX<200) state.sunY-=0.1; else if(state.sunX>200) state.sunY+=0.05;
+    var moveSun = (phase==='rising'||phase==='morning'||phase==='goWindow'||phase==='windowOpen'||phase==='goCook'||phase==='cooking'||phase==='goEat'||phase==='eating'||phase==='afternoon'||phase==='raining'||phase==='goCloseWin'||phase==='winClosed'||phase==='rainOver'||phase==='goOpenWin');
+    if(moveSun){ if(sunX<400){sunX+=0.25;} if(sunX<180&&sunY>55){sunY-=0.08;} else if(sunX>=180){sunY+=0.05;} }
+    if(phase==='dusk'||phase==='cookingDinner'){ sunX+=0.4; sunY+=0.3; }
+    // Walk person
+    if(personWalking){
+      var dx=personTargetX-personX;
+      if(Math.abs(dx)<3){ personX=personTargetX; personWalking=false; personAction='stand'; if(actionCallback){var cb=actionCallback;actionCallback=null;cb();} }
+      else { personX+=dx*0.06; }
     }
-    if(state.phase==='dusk'&&state.sunX<600){state.sunX+=0.5;state.sunY+=0.3;}
+    drawSky(); drawSun(); drawMoon(); drawClouds();
+    drawRoom(); drawBed(); drawKitchen();
+    drawPerson(); drawRain(); drawClickHalo();
+    tick++; steamFrames++;
     requestAnimationFrame(drawAll);
   }
 
-  // --- BUTTON HANDLERS ---
-  var btnWakeUp = document.getElementById('btnWakeUp');
-  var btnWindow = document.getElementById('btnWindow');
-  var btnCook = document.getElementById('btnCook');
-  var btnEat = document.getElementById('btnEat');
-  var btnCookDinner = document.getElementById('btnCookDinner');
-  var btnLight = document.getElementById('btnLight');
-  var btnSleep = document.getElementById('btnSleep');
-
-  if (btnWakeUp) btnWakeUp.addEventListener('click', function() {
-    if (state.phase !== 'night') return;
-    state.sleeping = false;
-    state.phase = 'morning';
-    setSky(255,160,80);
-    state.sunX = 30; state.sunY = 120;
-    setMsg('🌅 早上好！太阳出来了，开窗透透气吧！');
-  });
-
-  if (btnWindow) btnWindow.addEventListener('click', function() {
-    if (state.phase === 'morning' || state.phase === 'raining') {
-      // Open window in morning
-      if (state.phase === 'morning') {
-        state.windowOpen = true; state.phase = 'windowOpen';
-        setSky(135,206,250);
-        setMsg('🪟 窗户打开了！新鲜的空气～来煮早餐吧！');
-      }
-    } else if (state.phase === 'windowOpen' || state.phase === 'cooking' || state.phase === 'eating' || state.phase === 'afternoon') {
-      // Could also close, but let's trigger rain scenario if afternoon
-      if (state.phase === 'afternoon' || state.raining) {
-        state.windowOpen = false;
-        setMsg('🪟 窗户关上了！雨停后记得再开窗！');
-      }
-    } else if (state.phase === 'dusk') {
-      state.windowOpen = !state.windowOpen;
-      setMsg(state.windowOpen ? '🪟 窗户开了！' : '🪟 窗户关了！');
-    }
-  });
-
-  if (btnCook) btnCook.addEventListener('click', function() {
-    if (state.phase !== 'windowOpen') return;
-    state.cooking = true; state.phase = 'cooking';
-    setSky(100,180,255);
-    setMsg('🍳 开始煮早餐！香喷喷的煎蛋～');
-    setTimeout(function() {
-      state.cooking = false; state.hasMeal = true; state.phase = 'eating';
-      setMsg('🍽️ 早餐煮好了！快来吃吧！');
-    }, 3000);
-  });
-
-  if (btnEat) btnEat.addEventListener('click', function() {
-    if (state.phase !== 'eating') return;
-    state.eating = true;
-    setMsg('😋 吃得好香哦！吃完准备迎接新的一天！');
-    setTimeout(function() {
-      state.eating = false; state.hasMeal = false; state.phase = 'afternoon';
-      setSky(70,140,220);
-      setMsg('☀️ 下午了... 突然开始下雨！快关窗！');
-      setTimeout(function() {
-        state.raining = true; spawnRain(); setSky(80,90,110);
-        setMsg('🌧️ 下雨了！赶紧关窗！');
-        setTimeout(function() {
-          state.raining = false; state.raindrops = [];
-          setSky(150,120,180); state.phase='dusk';
-          setMsg('🌤️ 雨停了！天色变暗了，开灯吧，再煮晚餐！');
-        }, 6000);
-      }, 2000);
-    }, 3000);
-  });
-
-  if (btnCookDinner) btnCookDinner.addEventListener('click', function() {
-    if (state.phase !== 'dusk') return;
-    state.cookingDinner = true;
-    setSky(40,30,80);
-    setMsg('🍜 开始煮晚餐！热腾腾的面条～');
-    setTimeout(function() {
-      state.cookingDinner=false; state.hasDinner=true; state.phase='moonlit';
-      setSky(15,10,40); state.moonX=380; state.moonY=60;
-      setMsg('🌕 晚餐好了！吃完月亮出来了，睡觉吧～');
-    }, 3000);
-  });
-
-  if (btnLight) btnLight.addEventListener('click', function() {
-    if (state.phase !== 'dusk' && state.phase !== 'moonlit') return;
-    state.lightOn = !state.lightOn;
-    setMsg(state.lightOn ? '💡 灯开了！房间好温暖！' : '💡 灯关了，准备睡觉～');
-  });
-
-  if (btnSleep) btnSleep.addEventListener('click', function() {
-    if (state.phase !== 'moonlit') return;
-    state.sleeping = true; state.lightOn = false;
-    state.hasDinner = false; state.windowOpen = false;
-    state.phase = 'night';
-    setSky(15,10,40); state.sunX=-60;
-    setMsg('🌙 晚安！甜甜的梦～ 明天又是新的一天！');
-    setTimeout(function(){state.phase='night';},1000);
-  });
-
-  // Start the game loop
+  // ---- START ----
+  // Begin at night, then start day after a moment
+  setMsg('🌙 夜晚... 好好睡一觉吧');
+  setHint('');
+  setTimeout(function(){ startDay(); }, 3000);
   drawAll();
 
-  // BUTTON CHECKLIST: #btnWakeUp ✓  #btnWindow ✓  #btnCook ✓  #btnEat ✓  #btnCookDinner ✓  #btnLight ✓  #btnSleep ✓
+  // BUTTON CHECKLIST: canvas(click) ✓
 });
 </script>
 </body>
