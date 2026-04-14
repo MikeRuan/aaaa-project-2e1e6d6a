@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>我的一天 🌅</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Arial', sans-serif; }
+  #gameContainer { position: relative; width: 480px; height: 600px; }
+  canvas { position: absolute; top: 0; left: 0; z-index: 1; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+  #ui { position: absolute; bottom: 10px; left: 0; right: 0; z-index: 10; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 0 10px; }
+  .btn { background: rgba(255,255,255,0.9); border: none; border-radius: 20px; padding: 8px 16px; font-size: 14px; cursor: pointer; font-weight: bold; color: #333; box-shadow: 0 3px 8px rgba(0,0,0,0.3); transition: all 0.2s; }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 12px rgba(0,0,0,0.4); }
+  .btn:active { transform: translateY(0); }
+  #statusBar { position: absolute; top: 10px; left: 0; right: 0; z-index: 10; text-align: center; }
+  #statusMsg { background: rgba(0,0,0,0.55); color: #fff; border-radius: 12px; padding: 6px 14px; font-size: 13px; display: inline-block; }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <canvas id="c" width="480" height="600"></canvas>
+  <div id="statusBar"><span id="statusMsg">🌙 夜晚... 好好睡一觉吧</span></div>
+  <div id="ui">
+    <button class="btn" id="btnWakeUp">🌅 起床</button>
+    <button class="btn" id="btnWindow">🪟 开窗</button>
+    <button class="btn" id="btnCook">🍳 煮早餐</button>
+    <button class="btn" id="btnEat">🍽️ 吃早餐</button>
+    <button class="btn" id="btnCookDinner">🍜 煮晚餐</button>
+    <button class="btn" id="btnLight">💡 开灯</button>
+    <button class="btn" id="btnSleep">😴 睡觉</button>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var W = 480, H = 600;
+
+  // --- Game State ---
+  var state = {
+    phase: 'night',      // night, morning, windowOpen, cooking, eating, afternoon, raining, dusk, dinnerCooked, moonlit
+    sleeping: true,
+    windowOpen: false,
+    lightOn: false,
+    raining: false,
+    sunX: -60, sunY: 80,
+    moonX: 380, moonY: 60,
+    skyColor: [15, 10, 40],
+    targetSky: [15, 10, 40],
+    raindrops: [],
+    cookProgress: 0,
+    cooking: false,
+    eating: false,
+    eatProgress: 0,
+    hasMeal: false,
+    hasDinner: false,
+    cookingDinner: false,
+    steamFrames: 0,
+    personY: 0,       // 0=in bed, 1=standing
+    personAnim: 0,
+    tick: 0,
+    msg: '🌙 夜晚... 好好睡一觉吧'
+  };
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function setSky(r, g, b) { state.targetSky = [r, g, b]; }
+  function setMsg(m) { document.getElementById('statusMsg').textContent = m; }
+
+  // Rain init
+  function spawnRain() {
+    state.raindrops = [];
+    for (var i = 0; i < 80; i++) {
+      state.raindrops.push({ x: Math.random()*W, y: Math.random()*H, spd: 6+Math.random()*4, len: 12+Math.random()*10 });
+    }
+  }
+
+  // --- DRAW FUNCTIONS ---
+  function drawSky() {
+    var c = state.skyColor;
+    var grad = ctx.createLinearGradient(0, 0, 0, H*0.55);
+    grad.addColorStop(0, `rgb(${c[0]},${c[1]},${c[2]})`);
+    grad.addColorStop(1, `rgb(${Math.min(c[0]+40,255)},${Math.min(c[1]+30,255)},${Math.min(c[2]+20,255)})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H*0.55);
+  }
+
+  function drawSun() {
+    if (state.phase === 'night' || state.phase === 'moonlit') return;
+    var alpha = state.phase === 'morning' ? 0.9 : state.phase === 'dusk' ? 0.6 : 1;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // Glow
+    var grad = ctx.createRadialGradient(state.sunX, state.sunY, 5, state.sunX, state.sunY, 50);
+    grad.addColorStop(0, 'rgba(255,240,100,0.8)');
+    grad.addColorStop(1, 'rgba(255,200,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(state.sunX, state.sunY, 50, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#FFE033';
+    ctx.beginPath(); ctx.arc(state.sunX, state.sunY, 22, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawMoon() {
+    if (state.phase !== 'night' && state.phase !== 'moonlit') return;
+    ctx.save();
+    ctx.fillStyle = '#FFFDE0';
+    ctx.beginPath(); ctx.arc(state.moonX, state.moonY, 24, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(200,200,180,0.3)';
+    ctx.beginPath(); ctx.arc(state.moonX+8, state.moonY-6, 8, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawClouds() {
+    ctx.save();
+    ctx.fillStyle = state.raining ? 'rgba(120,120,140,0.85)' : 'rgba(255,255,255,0.75)';
+    var cx = [(state.tick*0.2)%W, (state.tick*0.15+180)%W, (state.tick*0.1+320)%W];
+    cx.forEach(function(x) {
+      ctx.beginPath(); ctx.ellipse(x, 70, 45, 22, 0, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(x+30, 65, 30, 18, 0, 0, Math.PI*2); ctx.fill();
+    });
+    ctx.restore();
+  }
+
+  function drawRoom() {
+    // Floor
+    ctx.fillStyle = '#C8A97A';
+    ctx.fillRect(0, H*0.55, W, H*0.45);
+    // Wall
+    ctx.fillStyle = '#F5E6C8';
+    ctx.fillRect(0, H*0.55-2, W, 4);
+    // Wallpaper stripes
+    ctx.fillStyle = 'rgba(200,160,100,0.15)';
+    for (var i = 0; i < W; i += 40) { ctx.fillRect(i, 0, 2, H*0.55); }
+    // Window
+    var wx = 60, wy = H*0.55+30, ww = 100, wh = 90;
+    ctx.fillStyle = state.windowOpen ? (state.raining ? '#90B0D0' : '#ADE8FF') : (state.lightOn ? '#FFEEAA' : '#B0CCE8');
+    ctx.fillRect(wx, wy, ww, wh);
+    ctx.strokeStyle = '#8B6C3A'; ctx.lineWidth = 5;
+    ctx.strokeRect(wx, wy, ww, wh);
+    ctx.strokeStyle = '#8B6C3A'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(wx+ww/2, wy); ctx.lineTo(wx+ww/2, wy+wh); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(wx, wy+wh/2); ctx.lineTo(wx+ww, wy+wh/2); ctx.stroke();
+    // Window open flap
+    if (state.windowOpen) {
+      ctx.save(); ctx.strokeStyle='#8B6C3A'; ctx.lineWidth=3;
+      ctx.strokeRect(wx+ww/2+2, wy+2, ww/2-4, wh/2-4); ctx.restore();
+    }
+    // Rain on window
+    if (state.raining && state.windowOpen) {
+      ctx.save(); ctx.strokeStyle='rgba(150,180,220,0.6)'; ctx.lineWidth=1;
+      for (var d=0;d<5;d++){ctx.beginPath();ctx.moveTo(wx+15+d*16,wy+5);ctx.lineTo(wx+10+d*16,wy+wh-5);ctx.stroke();}
+      ctx.restore();
+    }
+    // Curtains
+    ctx.fillStyle = '#E88080';
+    ctx.fillRect(wx-12, wy-5, 14, wh+10);
+    ctx.fillRect(wx+ww-2, wy-5, 14, wh+10);
+    // Lamp on wall
+    if (state.lightOn) {
+      ctx.save();
+      var lg = ctx.createRadialGradient(350, H*0.55+20, 5, 350, H*0.55+60, 80);
+      lg.addColorStop(0,'rgba(255,240,150,0.6)'); lg.addColorStop(1,'rgba(255,200,0,0)');
+      ctx.fillStyle=lg; ctx.beginPath(); ctx.arc(350,H*0.55+20,80,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
+    ctx.fillStyle = '#D4A030';
+    ctx.beginPath(); ctx.arc(350, H*0.55+18, 12, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#8B6C3A';
+    ctx.fillRect(347, H*0.55+30, 6, 20);
+  }
+
+  function drawBed() {
+    var bx=200, by=H*0.55+30;
+    // Bed frame
+    ctx.fillStyle = '#8B6C3A';
+    ctx.fillRect(bx, by+60, 170, 10);
+    ctx.fillRect(bx, by+55, 20, 70); ctx.fillRect(bx+150, by+55, 20, 70);
+    // Mattress
+    ctx.fillStyle = '#E8D5B0';
+    ctx.fillRect(bx+10, by+35, 160, 60);
+    // Pillow
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath(); ctx.ellipse(bx+50, by+48, 30, 15, 0, 0, Math.PI*2); ctx.fill();
+    // Blanket
+    ctx.fillStyle = '#7BC8E8';
+    ctx.fillRect(bx+10, by+48, 160, 45);
+    ctx.fillStyle='rgba(100,180,220,0.3)';
+    for(var s=0;s<4;s++){ctx.fillRect(bx+10,by+55+s*8,160,4);}
+  }
+
+  function drawKitchen() {
+    // Stove
+    var sx=290, sy=H*0.55+80;
+    ctx.fillStyle='#888'; ctx.fillRect(sx,sy,120,60); ctx.fillStyle='#666'; ctx.fillRect(sx+5,sy+5,110,50);
+    ctx.fillStyle='#333';
+    ctx.beginPath();ctx.arc(sx+35,sy+20,12,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(sx+85,sy+20,12,0,Math.PI*2);ctx.fill();
+    // Pan
+    if (state.hasMeal || state.cooking || state.hasDinner || state.cookingDinner) {
+      ctx.fillStyle='#555'; ctx.fillRect(sx+20,sy+8,50,8); ctx.fillRect(sx+10,sy+16,60,12);
+      if (state.cooking || state.hasMeal) { ctx.fillStyle='#FFB347'; ctx.beginPath();ctx.arc(sx+40,sy+22,10,0,Math.PI*2);ctx.fill(); }
+      if (state.cookingDinner || state.hasDinner) { ctx.fillStyle='#FF6B6B'; ctx.beginPath();ctx.arc(sx+40,sy+22,10,0,Math.PI*2);ctx.fill(); }
+      // Steam
+      if ((state.cooking||state.cookingDinner) && state.steamFrames%20<10) {
+        ctx.save(); ctx.strokeStyle='rgba(200,200,200,0.6)'; ctx.lineWidth=3;
+        for(var s2=0;s2<3;s2++){ctx.beginPath();ctx.moveTo(sx+28+s2*10,sy+8);ctx.bezierCurveTo(sx+22+s2*10,sy-5,sx+34+s2*10,sy-15,sx+28+s2*10,sy-25);ctx.stroke();}
+        ctx.restore();
+      }
+    }
+    // Table & plate
+    ctx.fillStyle='#C8A060'; ctx.fillRect(180,H*0.55+100,100,10); ctx.fillRect(200,H*0.55+110,60,50);
+    if (state.hasMeal && state.phase==='eating'||state.hasMeal&&state.phase==='morning'&&state.eating) {
+      ctx.fillStyle='#FFF'; ctx.beginPath(); ctx.ellipse(230,H*0.55+105,22,10,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#FFB347'; ctx.beginPath(); ctx.arc(230,H*0.55+105,8,0,Math.PI*2); ctx.fill();
+    }
+    if (state.hasDinner) {
+      ctx.fillStyle='#FFF'; ctx.beginPath(); ctx.ellipse(230,H*0.55+105,22,10,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#FF6B6B'; ctx.beginPath(); ctx.arc(230,H*0.55+105,8,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  function drawPerson() {
+    var px, py, sleeping = state.sleeping;
+    if (sleeping) {
+      // Person lying in bed
+      px=250; py=H*0.55+48;
+      ctx.save();
+      // Head
+      ctx.fillStyle='#FDBCB4'; ctx.beginPath(); ctx.arc(px,py,13,0,Math.PI*2); ctx.fill();
+      // Zzzs
+      ctx.fillStyle='rgba(100,150,255,0.8)'; ctx.font='bold 13px Arial';
+      var zOff = Math.sin(state.tick*0.05)*3;
+      ctx.fillText('z',px+15,py-8+zOff); ctx.fillText('z',px+22,py-18+zOff); ctx.fillText('Z',px+28,py-30+zOff);
+      ctx.restore();
+    } else {
+      // Person standing
+      px=230; py=H*0.55+30;
+      var bob = Math.sin(state.tick*0.1)*2;
+      ctx.save();
+      ctx.fillStyle='#FDBCB4';
+      ctx.beginPath(); ctx.arc(px,py+bob,14,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#5B9BD5';
+      ctx.beginPath(); ctx.moveTo(px-12,py+14+bob); ctx.lineTo(px+12,py+14+bob); ctx.lineTo(px+14,py+55+bob); ctx.lineTo(px-14,py+55+bob); ctx.closePath(); ctx.fill();
+      ctx.fillStyle='#3A6EA5';
+      ctx.fillRect(px-20,py+14+bob,8,28); ctx.fillRect(px+12,py+14+bob,8,28);
+      ctx.fillStyle='#FDBCB4';
+      ctx.fillRect(px-22,py+40+bob,10,16); ctx.fillRect(px+12,py+40+bob,10,16);
+      ctx.fillStyle='#555';
+      ctx.fillRect(px-14,py+55+bob,12,16); ctx.fillRect(px+2,py+55+bob,12,16);
+      // Happy face
+      if(state.eating){ctx.fillStyle='#333';ctx.font='10px Arial';ctx.fillText('😋',px-8,py+8+bob);}
+      ctx.restore();
+    }
+  }
+
+  function drawRain() {
+    if (!state.raining) return;
+    ctx.save(); ctx.strokeStyle='rgba(150,200,255,0.5)'; ctx.lineWidth=1.5;
+    state.raindrops.forEach(function(d) {
+      ctx.beginPath(); ctx.moveTo(d.x,d.y); ctx.lineTo(d.x-3,d.y+d.len); ctx.stroke();
+      d.y += d.spd;
+      if (d.y > H) { d.y=-10; d.x=Math.random()*W; }
+    });
+    ctx.restore();
+  }
+
+  function drawAll() {
+    ctx.clearRect(0,0,W,H);
+    drawSky(); drawSun(); drawMoon();
+    if (state.phase!=='night'&&state.phase!=='moonlit') drawClouds();
+    drawRoom(); drawBed(); drawKitchen();
+    drawPerson(); drawRain();
+    state.tick++;
+    state.steamFrames++;
+    // Lerp sky
+    state.skyColor[0]=lerp(state.skyColor[0],state.targetSky[0],0.02);
+    state.skyColor[1]=lerp(state.skyColor[1],state.targetSky[1],0.02);
+    state.skyColor[2]=lerp(state.skyColor[2],state.targetSky[2],0.02);
+    // Move sun
+    if (state.phase==='morning'||state.phase==='windowOpen'||state.phase==='cooking'||state.phase==='eating'||state.phase==='afternoon') {
+      if(state.sunX<360) state.sunX+=0.3;
+      if(state.sunY>60&&state.sunX<200) state.sunY-=0.1; else if(state.sunX>200) state.sunY+=0.05;
+    }
+    if(state.phase==='dusk'&&state.sunX<600){state.sunX+=0.5;state.sunY+=0.3;}
+    requestAnimationFrame(drawAll);
+  }
+
+  // --- BUTTON HANDLERS ---
+  var btnWakeUp = document.getElementById('btnWakeUp');
+  var btnWindow = document.getElementById('btnWindow');
+  var btnCook = document.getElementById('btnCook');
+  var btnEat = document.getElementById('btnEat');
+  var btnCookDinner = document.getElementById('btnCookDinner');
+  var btnLight = document.getElementById('btnLight');
+  var btnSleep = document.getElementById('btnSleep');
+
+  if (btnWakeUp) btnWakeUp.addEventListener('click', function() {
+    if (state.phase !== 'night') return;
+    state.sleeping = false;
+    state.phase = 'morning';
+    setSky(255,160,80);
+    state.sunX = 30; state.sunY = 120;
+    setMsg('🌅 早上好！太阳出来了，开窗透透气吧！');
+  });
+
+  if (btnWindow) btnWindow.addEventListener('click', function() {
+    if (state.phase === 'morning' || state.phase === 'raining') {
+      // Open window in morning
+      if (state.phase === 'morning') {
+        state.windowOpen = true; state.phase = 'windowOpen';
+        setSky(135,206,250);
+        setMsg('🪟 窗户打开了！新鲜的空气～来煮早餐吧！');
+      }
+    } else if (state.phase === 'windowOpen' || state.phase === 'cooking' || state.phase === 'eating' || state.phase === 'afternoon') {
+      // Could also close, but let's trigger rain scenario if afternoon
+      if (state.phase === 'afternoon' || state.raining) {
+        state.windowOpen = false;
+        setMsg('🪟 窗户关上了！雨停后记得再开窗！');
+      }
+    } else if (state.phase === 'dusk') {
+      state.windowOpen = !state.windowOpen;
+      setMsg(state.windowOpen ? '🪟 窗户开了！' : '🪟 窗户关了！');
+    }
+  });
+
+  if (btnCook) btnCook.addEventListener('click', function() {
+    if (state.phase !== 'windowOpen') return;
+    state.cooking = true; state.phase = 'cooking';
+    setSky(100,180,255);
+    setMsg('🍳 开始煮早餐！香喷喷的煎蛋～');
+    setTimeout(function() {
+      state.cooking = false; state.hasMeal = true; state.phase = 'eating';
+      setMsg('🍽️ 早餐煮好了！快来吃吧！');
+    }, 3000);
+  });
+
+  if (btnEat) btnEat.addEventListener('click', function() {
+    if (state.phase !== 'eating') return;
+    state.eating = true;
+    setMsg('😋 吃得好香哦！吃完准备迎接新的一天！');
+    setTimeout(function() {
+      state.eating = false; state.hasMeal = false; state.phase = 'afternoon';
+      setSky(70,140,220);
+      setMsg('☀️ 下午了... 突然开始下雨！快关窗！');
+      setTimeout(function() {
+        state.raining = true; spawnRain(); setSky(80,90,110);
+        setMsg('🌧️ 下雨了！赶紧关窗！');
+        setTimeout(function() {
+          state.raining = false; state.raindrops = [];
+          setSky(150,120,180); state.phase='dusk';
+          setMsg('🌤️ 雨停了！天色变暗了，开灯吧，再煮晚餐！');
+        }, 6000);
+      }, 2000);
+    }, 3000);
+  });
+
+  if (btnCookDinner) btnCookDinner.addEventListener('click', function() {
+    if (state.phase !== 'dusk') return;
+    state.cookingDinner = true;
+    setSky(40,30,80);
+    setMsg('🍜 开始煮晚餐！热腾腾的面条～');
+    setTimeout(function() {
+      state.cookingDinner=false; state.hasDinner=true; state.phase='moonlit';
+      setSky(15,10,40); state.moonX=380; state.moonY=60;
+      setMsg('🌕 晚餐好了！吃完月亮出来了，睡觉吧～');
+    }, 3000);
+  });
+
+  if (btnLight) btnLight.addEventListener('click', function() {
+    if (state.phase !== 'dusk' && state.phase !== 'moonlit') return;
+    state.lightOn = !state.lightOn;
+    setMsg(state.lightOn ? '💡 灯开了！房间好温暖！' : '💡 灯关了，准备睡觉～');
+  });
+
+  if (btnSleep) btnSleep.addEventListener('click', function() {
+    if (state.phase !== 'moonlit') return;
+    state.sleeping = true; state.lightOn = false;
+    state.hasDinner = false; state.windowOpen = false;
+    state.phase = 'night';
+    setSky(15,10,40); state.sunX=-60;
+    setMsg('🌙 晚安！甜甜的梦～ 明天又是新的一天！');
+    setTimeout(function(){state.phase='night';},1000);
+  });
+
+  // Start the game loop
+  drawAll();
+
+  // BUTTON CHECKLIST: #btnWakeUp ✓  #btnWindow ✓  #btnCook ✓  #btnEat ✓  #btnCookDinner ✓  #btnLight ✓  #btnSleep ✓
+});
+</script>
+</body>
+</html>
