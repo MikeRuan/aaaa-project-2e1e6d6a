@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', function() {
   function lerp(a, b, t) { return a + (b - a) * t; }
 
   // ---- STATE ----
-  var phase = 'night'; // night, rising, morning, goWindow, windowOpen, goCook, cooking, goEat, eating, afternoon, raining, goCloseWin, winClosed, rainOver, goOpenWin, dusk, goCookDinner, cookingDinner, moonlit, goSleep
+  var phase = 'night';
   var sleeping = true;
   var windowOpen = false;
   var lightOn = false;
@@ -46,7 +46,7 @@ document.addEventListener('DOMContentLoaded', function() {
   var eating = false;
   var steamFrames = 0;
   var tick = 0;
-  var clickable = false; // can user click person?
+  var clickable = false;
 
   // Sky
   var skyColor = [15, 10, 40];
@@ -57,12 +57,12 @@ document.addEventListener('DOMContentLoaded', function() {
   var sunX = -60, sunY = 120;
   var moonX = 380, moonY = 60;
 
-  // Person walk animation
-  var personX = 245, personY = 0; // Y: 0=in bed area, actual screen y computed
+  // Person
+  var personX = 245, personY = 0;
   var personTargetX = 245;
   var personWalking = false;
-  var personFacing = 1; // 1=right, -1=left
-  var personAction = ''; // 'sleep','stand','walk','cook','eat','close'
+  var personFacing = 1;
+  var personAction = '';
   var actionCallback = null;
 
   function walkTo(tx, cb) {
@@ -82,7 +82,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // ---- PHASE TRIGGERS ----
   function startDay() {
-    // Sun rises, hint to click person
     phase = 'rising';
     setSky(255, 160, 80);
     sunX = 20; sunY = 150;
@@ -151,7 +150,6 @@ document.addEventListener('DOMContentLoaded', function() {
         setSky(70, 140, 220);
         setMsg('☀️ 吃完了！美好的下午...');
         setHint('');
-        // After a moment, it rains
         setTimeout(function(){
           phase = 'raining';
           raining = true; spawnRain();
@@ -174,7 +172,6 @@ document.addEventListener('DOMContentLoaded', function() {
       phase = 'winClosed';
       setMsg('🪟 窗户关上了！等雨停吧...');
       personAction = 'stand';
-      // Rain stops after a while
       setTimeout(function(){
         raining = false; raindrops = [];
         setSky(160, 130, 190);
@@ -239,7 +236,6 @@ document.addEventListener('DOMContentLoaded', function() {
       setSky(15, 10, 40);
       sunX = -60; sunY = 150;
       setMsg('🌙 晚安！甜甜的梦～');
-      // Next day rises after delay
       setTimeout(function(){
         startDay();
       }, 4000);
@@ -247,17 +243,17 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   // ---- CLICK HANDLER ----
-  canvas.addEventListener('click', function(e) {
+  var canvasEl = document.getElementById('c');
+  if (canvasEl) canvasEl.addEventListener('click', function(e) {
     if (!clickable) return;
     var rect = canvas.getBoundingClientRect();
     var mx = (e.clientX - rect.left) * (W / rect.width);
     var my = (e.clientY - rect.top) * (H / rect.height);
-    // Person hit area
+    // When sleeping, person is lying in bed — use bed center as hit area
     var px = sleeping ? 245 : personX;
-    var py = sleeping ? H*0.55+48 : H*0.55+30;
+    var py = sleeping ? H*0.55+58 : H*0.55+30;
     var dist = Math.sqrt((mx-px)*(mx-px)+(my-py)*(my-py));
-    if (dist > 55) return; // must click near person
-    // Phase-based actions
+    if (dist > 65) return;
     if (phase === 'rising') doWakeUp();
     else if (phase === 'morning') doGoWindow();
     else if (phase === 'windowOpen') doGoCook();
@@ -341,12 +337,17 @@ document.addEventListener('DOMContentLoaded', function() {
 
   function drawBed() {
     var bx=170, by=H*0.55+30;
+    // Bed frame
     ctx.fillStyle='#8B6C3A';
     ctx.fillRect(bx,by+60,170,10);
     ctx.fillRect(bx,by+55,20,70); ctx.fillRect(bx+150,by+55,20,70);
+    // Mattress
     ctx.fillStyle='#E8D5B0'; ctx.fillRect(bx+10,by+35,160,60);
+    // Pillow
     ctx.fillStyle='#FFFFFF'; ctx.beginPath(); ctx.ellipse(bx+45,by+48,28,14,0,0,Math.PI*2); ctx.fill();
+    // Blanket
     ctx.fillStyle='#7BC8E8'; ctx.fillRect(bx+10,by+48,160,45);
+    // Blanket stripes
     ctx.fillStyle='rgba(100,180,220,0.3)';
     for(var s=0;s<4;s++){ctx.fillRect(bx+10,by+55+s*8,160,4);}
   }
@@ -380,57 +381,91 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
 
-  function drawPerson() {
+  // Draw a sleeping person lying in bed (visible character, not just z's)
+  function drawSleepingPerson() {
+    var bx = 170, by = H*0.55+30;
     ctx.save();
+    // Body lying under blanket — show torso shape as a lump
+    ctx.fillStyle = '#5B9BD5';
+    ctx.beginPath();
+    ctx.ellipse(245, by+68, 52, 13, 0, 0, Math.PI*2);
+    ctx.fill();
+    // Redraw blanket on top of body (covers torso)
+    ctx.fillStyle='#7BC8E8';
+    ctx.fillRect(bx+10, by+55, 160, 38);
+    ctx.fillStyle='rgba(100,180,220,0.3)';
+    for(var s=0;s<4;s++){ctx.fillRect(bx+10,by+55+s*8,160,4);}
+    // Head peeking out from pillow end
+    ctx.fillStyle='#FDBCB4';
+    ctx.beginPath(); ctx.arc(207, by+48, 13, 0, Math.PI*2); ctx.fill();
+    // Hair
+    ctx.fillStyle='#5C3A1E';
+    ctx.beginPath(); ctx.arc(207, by+44, 13, Math.PI, 0); ctx.fill();
+    // Closed eyes (sleeping)
+    ctx.strokeStyle='#333'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(202, by+47, 3, Math.PI, 0); ctx.stroke(); // left eye closed
+    ctx.beginPath(); ctx.arc(212, by+47, 3, Math.PI, 0); ctx.stroke(); // right eye closed
+    // Little smile
+    ctx.beginPath(); ctx.arc(207, by+51, 3.5, 0.1*Math.PI, 0.9*Math.PI); ctx.stroke();
+    // ZZZ bubbles floating up
+    ctx.fillStyle='rgba(150,180,255,0.9)';
+    ctx.font='bold 13px Arial';
+    var zo = Math.sin(tick*0.05)*3;
+    ctx.fillText('z', 222, by+30+zo);
+    ctx.fillText('z', 230, by+18+zo);
+    ctx.font='bold 17px Arial';
+    ctx.fillText('Z', 238, by+4+zo);
+    ctx.restore();
+  }
+
+  function drawPerson() {
+    // If sleeping, draw the special lying-down person
     if(sleeping){
-      var px=245, py=H*0.55+48;
-      ctx.fillStyle='#FDBCB4'; ctx.beginPath(); ctx.arc(px,py,13,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle='rgba(100,150,255,0.85)'; ctx.font='bold 13px Arial';
-      var zo=Math.sin(tick*0.05)*3;
-      ctx.fillText('z',px+15,py-8+zo); ctx.fillText('z',px+22,py-18+zo); ctx.fillText('Z',px+28,py-30+zo);
-    } else {
-      var px2=personX, py2=H*0.55+30;
-      var bob = (personWalking ? Math.sin(tick*0.22)*4 : Math.sin(tick*0.08)*1.5);
-      // Shadow
-      ctx.fillStyle='rgba(0,0,0,0.12)'; ctx.beginPath(); ctx.ellipse(px2,py2+75,16,5,0,0,Math.PI*2); ctx.fill();
-      // Legs
-      ctx.fillStyle='#555';
-      if(personWalking){
-        var la=Math.sin(tick*0.22)*14;
-        ctx.fillRect(px2-10+la,py2+54,10,20); ctx.fillRect(px2-la,py2+54,10,20);
-      } else {
-        ctx.fillRect(px2-12,py2+54,10,20); ctx.fillRect(px2+2,py2+54,10,20);
-      }
-      // Body
-      ctx.fillStyle='#5B9BD5'; ctx.beginPath(); ctx.moveTo(px2-13,py2+14+bob); ctx.lineTo(px2+13,py2+14+bob); ctx.lineTo(px2+15,py2+55+bob); ctx.lineTo(px2-15,py2+55+bob); ctx.closePath(); ctx.fill();
-      // Arms
-      ctx.fillStyle='#3A6EA5';
-      if(personAction==='cook'){
-        ctx.fillRect(px2+12*personFacing,py2+16+bob,8*personFacing,22);
-        ctx.fillRect(px2-12,py2+16+bob,-8,30);
-      } else if(personAction==='eat'){
-        ctx.fillRect(px2-20,py2+16+bob,8,24);
-        ctx.fillRect(px2+12,py2+16+bob,8,24);
-      } else {
-        ctx.fillRect(px2-20,py2+14+bob,8,26); ctx.fillRect(px2+12,py2+14+bob,8,26);
-      }
-      // Hands
-      ctx.fillStyle='#FDBCB4';
-      ctx.beginPath(); ctx.arc(px2-16,py2+40+bob,6,0,Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(px2+18,py2+40+bob,6,0,Math.PI*2); ctx.fill();
-      // Head
-      ctx.fillStyle='#FDBCB4'; ctx.beginPath(); ctx.arc(px2,py2+bob,14,0,Math.PI*2); ctx.fill();
-      // Hair
-      ctx.fillStyle='#5C3A1E'; ctx.beginPath(); ctx.arc(px2,py2-4+bob,14,Math.PI,0); ctx.fill();
-      // Eyes
-      ctx.fillStyle='#333';
-      ctx.beginPath(); ctx.arc(px2-5*personFacing+3,py2+2+bob,2.5,0,Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(px2+5*personFacing+3,py2+2+bob,2.5,0,Math.PI*2); ctx.fill();
-      // Smile
-      ctx.strokeStyle='#333'; ctx.lineWidth=1.5;
-      ctx.beginPath(); ctx.arc(px2,py2+6+bob,5,0.1*Math.PI,0.9*Math.PI); ctx.stroke();
-      if(eating){ctx.font='16px Arial';ctx.fillText('😋',px2-8,py2-18+bob);}
+      drawSleepingPerson();
+      return;
     }
+    ctx.save();
+    var px2=personX, py2=H*0.55+30;
+    var bob = (personWalking ? Math.sin(tick*0.22)*4 : Math.sin(tick*0.08)*1.5);
+    // Shadow
+    ctx.fillStyle='rgba(0,0,0,0.12)'; ctx.beginPath(); ctx.ellipse(px2,py2+75,16,5,0,0,Math.PI*2); ctx.fill();
+    // Legs
+    ctx.fillStyle='#555';
+    if(personWalking){
+      var la=Math.sin(tick*0.22)*14;
+      ctx.fillRect(px2-10+la,py2+54,10,20); ctx.fillRect(px2-la,py2+54,10,20);
+    } else {
+      ctx.fillRect(px2-12,py2+54,10,20); ctx.fillRect(px2+2,py2+54,10,20);
+    }
+    // Body
+    ctx.fillStyle='#5B9BD5'; ctx.beginPath(); ctx.moveTo(px2-13,py2+14+bob); ctx.lineTo(px2+13,py2+14+bob); ctx.lineTo(px2+15,py2+55+bob); ctx.lineTo(px2-15,py2+55+bob); ctx.closePath(); ctx.fill();
+    // Arms
+    ctx.fillStyle='#3A6EA5';
+    if(personAction==='cook'){
+      ctx.fillRect(px2+12*personFacing,py2+16+bob,8*personFacing,22);
+      ctx.fillRect(px2-12,py2+16+bob,-8,30);
+    } else if(personAction==='eat'){
+      ctx.fillRect(px2-20,py2+16+bob,8,24);
+      ctx.fillRect(px2+12,py2+16+bob,8,24);
+    } else {
+      ctx.fillRect(px2-20,py2+14+bob,8,26); ctx.fillRect(px2+12,py2+14+bob,8,26);
+    }
+    // Hands
+    ctx.fillStyle='#FDBCB4';
+    ctx.beginPath(); ctx.arc(px2-16,py2+40+bob,6,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(px2+18,py2+40+bob,6,0,Math.PI*2); ctx.fill();
+    // Head
+    ctx.fillStyle='#FDBCB4'; ctx.beginPath(); ctx.arc(px2,py2+bob,14,0,Math.PI*2); ctx.fill();
+    // Hair
+    ctx.fillStyle='#5C3A1E'; ctx.beginPath(); ctx.arc(px2,py2-4+bob,14,Math.PI,0); ctx.fill();
+    // Eyes
+    ctx.fillStyle='#333';
+    ctx.beginPath(); ctx.arc(px2-5*personFacing+3,py2+2+bob,2.5,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(px2+5*personFacing+3,py2+2+bob,2.5,0,Math.PI*2); ctx.fill();
+    // Smile
+    ctx.strokeStyle='#333'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(px2,py2+6+bob,5,0.1*Math.PI,0.9*Math.PI); ctx.stroke();
+    if(eating){ctx.font='16px Arial';ctx.fillText('😋',px2-8,py2-18+bob);}
     ctx.restore();
   }
 
@@ -446,7 +481,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
   function drawClickHalo() {
     if(!clickable) return;
-    var px = sleeping ? 245 : personX;
+    // Halo follows person correctly whether sleeping or standing
+    var px = sleeping ? 207 : personX;
     var py = sleeping ? H*0.55+48 : H*0.55+30;
     ctx.save();
     var pulse = 0.4+0.3*Math.sin(tick*0.12);
@@ -459,15 +495,15 @@ document.addEventListener('DOMContentLoaded', function() {
   // ---- MAIN LOOP ----
   function drawAll() {
     ctx.clearRect(0,0,W,H);
-    // Lerp sky
+    // Lerp sky color gradually
     skyColor[0]=lerp(skyColor[0],targetSky[0],0.018);
     skyColor[1]=lerp(skyColor[1],targetSky[1],0.018);
     skyColor[2]=lerp(skyColor[2],targetSky[2],0.018);
-    // Move sun
+    // Move sun across the sky
     var moveSun = (phase==='rising'||phase==='morning'||phase==='goWindow'||phase==='windowOpen'||phase==='goCook'||phase==='cooking'||phase==='goEat'||phase==='eating'||phase==='afternoon'||phase==='raining'||phase==='goCloseWin'||phase==='winClosed'||phase==='rainOver'||phase==='goOpenWin');
     if(moveSun){ if(sunX<400){sunX+=0.25;} if(sunX<180&&sunY>55){sunY-=0.08;} else if(sunX>=180){sunY+=0.05;} }
     if(phase==='dusk'||phase==='cookingDinner'){ sunX+=0.4; sunY+=0.3; }
-    // Walk person
+    // Walk person toward target
     if(personWalking){
       var dx=personTargetX-personX;
       if(Math.abs(dx)<3){ personX=personTargetX; personWalking=false; personAction='stand'; if(actionCallback){var cb=actionCallback;actionCallback=null;cb();} }
@@ -481,7 +517,6 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   // ---- START ----
-  // Begin at night, then start day after a moment
   setMsg('🌙 夜晚... 好好睡一觉吧');
   setHint('');
   setTimeout(function(){ startDay(); }, 3000);
